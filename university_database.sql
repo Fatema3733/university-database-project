@@ -1,34 +1,13 @@
-
- =========================================================
 -- UNIVERSITY DATABASE SYSTEM
--- This project models a university database system containing:
--- departments, teachers, students, courses, enrolments,
--- assessments, and grades.
---
--- Features included:
--- - relational database design with foreign keys
--- - validation using CHECK constraints
--- - triggers for additional business rules
--- - realistic student enrolment logic
--- - performance analysis queries
--- =========================================================
--- 1. RESET DATABASE
--- =========================================================
-DROP DATABASE IF EXISTS UniversityDatabase;
+
 CREATE DATABASE UniversityDatabase;
 USE UniversityDatabase;
 
--- =========================================================
--- 2. CREATE TABLES
--- =========================================================
-
--- Stores university departments
 CREATE TABLE Departments (
     department_id INT PRIMARY KEY AUTO_INCREMENT,
     department_name VARCHAR(100) NOT NULL UNIQUE
 );
 
--- Stores teacher records
 CREATE TABLE Teachers (
     teacher_id INT PRIMARY KEY AUTO_INCREMENT,
     first_name VARCHAR(50) NOT NULL,
@@ -39,24 +18,22 @@ CREATE TABLE Teachers (
         FOREIGN KEY (department_id) REFERENCES Departments(department_id)
 );
 
--- Stores student records
 CREATE TABLE Students (
     student_id INT PRIMARY KEY AUTO_INCREMENT,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
-    gender VARCHAR(10) NOT NULL,
+    gender VARCHAR(20) NOT NULL,
     date_of_birth DATE NOT NULL,
     enrolment_year INT NOT NULL,
     department_id INT NOT NULL,
     CONSTRAINT fk_students_department
         FOREIGN KEY (department_id) REFERENCES Departments(department_id),
     CONSTRAINT chk_students_gender
-        CHECK (gender IN ('Male', 'Female')),
+        CHECK (gender IN ('Male', 'Female', 'Other', 'Prefer not to say')),
     CONSTRAINT chk_students_enrolment_year
         CHECK (enrolment_year BETWEEN 2022 AND 2024)
 );
 
--- Stores course records
 CREATE TABLE Courses (
     course_id INT PRIMARY KEY AUTO_INCREMENT,
     course_name VARCHAR(100) NOT NULL UNIQUE,
@@ -74,7 +51,6 @@ CREATE TABLE Courses (
         CHECK (year_of_study BETWEEN 1 AND 4)
 );
 
--- Stores student course enrolments
 CREATE TABLE Enrolments (
     enrolment_id INT PRIMARY KEY AUTO_INCREMENT,
     student_id INT NOT NULL,
@@ -86,12 +62,9 @@ CREATE TABLE Enrolments (
     CONSTRAINT fk_enrolments_student
         FOREIGN KEY (student_id) REFERENCES Students(student_id),
     CONSTRAINT fk_enrolments_course
-        FOREIGN KEY (course_id) REFERENCES Courses(course_id),
-    CONSTRAINT chk_enrolments_academic_year
-        CHECK (academic_year IN ('2023/2024'))
+        FOREIGN KEY (course_id) REFERENCES Courses(course_id)
 );
 
--- Stores assessment components for each course
 CREATE TABLE Assessments (
     assessment_id INT PRIMARY KEY AUTO_INCREMENT,
     course_id INT NOT NULL,
@@ -108,7 +81,6 @@ CREATE TABLE Assessments (
         UNIQUE (course_id, assessment_name)
 );
 
--- Stores student grades for each assessment
 CREATE TABLE Grades (
     grade_id INT PRIMARY KEY AUTO_INCREMENT,
     enrolment_id INT NOT NULL,
@@ -125,15 +97,9 @@ CREATE TABLE Grades (
 );
 
 
--- =========================================================
--- 3. CREATE TRIGGERS
--- =========================================================
--- These triggers enforce additional business rules that are
--- not fully covered by standard constraints.
-
 DELIMITER $$
 
--- Prevents a student's date of birth from being set in the future
+-- Prevent future dates of birth
 CREATE TRIGGER trg_students_check_dob_insert
 BEFORE INSERT ON Students
 FOR EACH ROW
@@ -154,7 +120,7 @@ BEGIN
     END IF;
 END$$
 
--- Ensures that the assigned teacher belongs to the same department as the course
+-- Ensure assigned teacher belongs to the same department as the course
 CREATE TRIGGER trg_courses_teacher_department_insert
 BEFORE INSERT ON Courses
 FOR EACH ROW
@@ -165,6 +131,11 @@ BEGIN
     INTO teacher_department_id
     FROM Teachers
     WHERE teacher_id = NEW.teacher_id;
+
+    IF teacher_department_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Assigned teacher does not exist.';
+    END IF;
 
     IF teacher_department_id <> NEW.department_id THEN
         SIGNAL SQLSTATE '45000'
@@ -183,18 +154,124 @@ BEGIN
     FROM Teachers
     WHERE teacher_id = NEW.teacher_id;
 
+    IF teacher_department_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Assigned teacher does not exist.';
+    END IF;
+
     IF teacher_department_id <> NEW.department_id THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Teacher must belong to the same department as the course.';
     END IF;
 END$$
 
+-- Prevent total assessment weighting from exceeding 100 for a course
+CREATE TRIGGER trg_assessments_weighting_insert
+BEFORE INSERT ON Assessments
+FOR EACH ROW
+BEGIN
+    DECLARE current_total DECIMAL(5,2);
+
+    SELECT COALESCE(SUM(weighting), 0)
+    INTO current_total
+    FROM Assessments
+    WHERE course_id = NEW.course_id;
+
+    IF current_total + NEW.weighting > 100 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Total assessment weighting for this course cannot exceed 100.';
+    END IF;
+END$$
+
+CREATE TRIGGER trg_assessments_weighting_update
+BEFORE UPDATE ON Assessments
+FOR EACH ROW
+BEGIN
+    DECLARE current_total DECIMAL(5,2);
+
+    SELECT COALESCE(SUM(weighting), 0)
+    INTO current_total
+    FROM Assessments
+    WHERE course_id = NEW.course_id
+      AND assessment_id <> NEW.assessment_id;
+
+    IF current_total + NEW.weighting > 100 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Total assessment weighting for this course cannot exceed 100.';
+    END IF;
+END$$
+
+-- Ensure a grade can only be recorded against an assessment
+-- belonging to the same course as the enrolment
+CREATE TRIGGER trg_grades_match_course_insert
+BEFORE INSERT ON Grades
+FOR EACH ROW
+BEGIN
+    DECLARE enrolment_course_id INT;
+    DECLARE assessment_course_id INT;
+
+    SELECT course_id
+    INTO enrolment_course_id
+    FROM Enrolments
+    WHERE enrolment_id = NEW.enrolment_id;
+
+    SELECT course_id
+    INTO assessment_course_id
+    FROM Assessments
+    WHERE assessment_id = NEW.assessment_id;
+
+    IF enrolment_course_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Enrolment does not exist.';
+    END IF;
+
+    IF assessment_course_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Assessment does not exist.';
+    END IF;
+
+    IF enrolment_course_id <> assessment_course_id THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Assessment must belong to the same course as the enrolment.';
+    END IF;
+END$$
+
+CREATE TRIGGER trg_grades_match_course_update
+BEFORE UPDATE ON Grades
+FOR EACH ROW
+BEGIN
+    DECLARE enrolment_course_id INT;
+    DECLARE assessment_course_id INT;
+
+    SELECT course_id
+    INTO enrolment_course_id
+    FROM Enrolments
+    WHERE enrolment_id = NEW.enrolment_id;
+
+    SELECT course_id
+    INTO assessment_course_id
+    FROM Assessments
+    WHERE assessment_id = NEW.assessment_id;
+
+    IF enrolment_course_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Enrolment does not exist.';
+    END IF;
+
+    IF assessment_course_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Assessment does not exist.';
+    END IF;
+
+    IF enrolment_course_id <> assessment_course_id THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Assessment must belong to the same course as the enrolment.';
+    END IF;
+END$$
+
 DELIMITER ;
 
 
--- =========================================================
--- 4. INSERT DEPARTMENTS
--- =========================================================
 INSERT INTO Departments (department_name)
 VALUES
 ('Economics'),
@@ -204,9 +281,6 @@ VALUES
 ('Social Sciences');
 
 
--- =========================================================
--- 5. INSERT TEACHERS
--- =========================================================
 INSERT INTO Teachers (first_name, last_name, email, department_id)
 VALUES
 ('Sarah', 'Mitchell', 'sarah.mitchell@uni.ac.uk', 1),
@@ -230,10 +304,6 @@ VALUES
 ('Zara', 'Shah', 'zara.shah@uni.ac.uk', 5);
 
 
--- =========================================================
--- 6. INSERT COURSES
--- 3 courses per department = 15 total
--- =========================================================
 INSERT INTO Courses (course_name, department_id, teacher_id, credits, year_of_study)
 VALUES
 ('Microeconomics', 1, 1, 20, 1),
@@ -256,14 +326,9 @@ VALUES
 ('Social Theory', 5, 14, 20, 2),
 ('Public Policy', 5, 15, 20, 3);
 
-
--- =========================================================
--- 7. TEMPORARY NAME TABLES
--- Used to generate realistic student names
--- =========================================================
 CREATE TEMPORARY TABLE temp_first_names (
     first_name VARCHAR(50),
-    gender VARCHAR(10)
+    gender VARCHAR(20)
 );
 
 INSERT INTO temp_first_names VALUES
@@ -296,11 +361,6 @@ INSERT INTO temp_last_names VALUES
 ('Patel'),('Khan'),('Ali'),('Hussain'),('Rahman'),('Ahmed'),
 ('Shah'),('Begum'),('Chowdhury'),('Uddin');
 
-
--- =========================================================
--- 8. INSERT 300 STUDENTS
--- Duplicate full names are allowed for realism
--- =========================================================
 INSERT INTO Students (
     first_name,
     last_name,
@@ -320,14 +380,6 @@ FROM temp_first_names fn
 CROSS JOIN temp_last_names ln
 ORDER BY RAND()
 LIMIT 300;
-
-
--- =========================================================
--- 9. INSERT ENROLMENTS
--- Each student receives:
--- - 2 random courses from their own department
--- - 1 random elective from another department
--- =========================================================
 
 -- Two home-department courses per student
 INSERT INTO Enrolments (student_id, course_id, enrolment_date, academic_year)
@@ -372,10 +424,6 @@ FROM (
 WHERE ranked_electives.row_num = 1;
 
 
--- =========================================================
--- 10. INSERT ASSESSMENTS
--- Two assessments per course
--- =========================================================
 INSERT INTO Assessments (course_id, assessment_name, assessment_type, weighting)
 VALUES
 (1, 'Microeconomics Coursework', 'Coursework', 40.00),
@@ -414,27 +462,32 @@ VALUES
 (15, 'Public Policy Exam', 'Exam', 60.00);
 
 
--- =========================================================
--- 11. VALIDATION CHECK
--- This query checks whether assessment weightings total 100
--- for each course
--- =========================================================
+-- Check whether each course has assessment weightings totalling 100
 SELECT
-    course_id,
-    SUM(weighting) AS total_weighting
-FROM Assessments
-GROUP BY course_id
-HAVING SUM(weighting) <> 100;
+    c.course_id,
+    c.course_name,
+    COALESCE(SUM(a.weighting), 0) AS total_weighting
+FROM Courses c
+LEFT JOIN Assessments a
+    ON c.course_id = a.course_id
+GROUP BY c.course_id, c.course_name
+HAVING COALESCE(SUM(a.weighting), 0) <> 100;
+
+-- Check for any grades linked to assessments from the wrong course
+SELECT
+    g.grade_id,
+    e.enrolment_id,
+    e.course_id AS enrolment_course,
+    a.assessment_id,
+    a.course_id AS assessment_course
+FROM Grades g
+JOIN Enrolments e
+    ON g.enrolment_id = e.enrolment_id
+JOIN Assessments a
+    ON g.assessment_id = a.assessment_id
+WHERE e.course_id <> a.course_id;
 
 
--- =========================================================
--- 12. INSERT GRADES
--- Grade generation includes:
--- - student ability bands
--- - coursework bonus
--- - subject difficulty adjustment
--- - random variation
--- =========================================================
 INSERT INTO Grades (enrolment_id, assessment_id, score)
 SELECT
     e.enrolment_id,
@@ -481,10 +534,8 @@ FROM Enrolments e
 JOIN Assessments a
     ON e.course_id = a.course_id;
 
+-- VALIDATION CHECKS
 
--- =========================================================
--- 13. SANITY CHECKS
--- =========================================================
 SELECT COUNT(*) AS department_count FROM Departments;
 SELECT COUNT(*) AS teacher_count FROM Teachers;
 SELECT COUNT(*) AS student_count FROM Students;
@@ -502,15 +553,11 @@ SELECT COUNT(*) AS grade_count FROM Grades;
 -- Assessments: 30
 -- Grades: 1800
 
+-- ANALYSIS QUERIES
 
--- =========================================================
--- 14. ANALYSIS QUERIES
--- =========================================================
-
--- ---------------------------------------------------------
 -- Query A: Course Performance
 -- Calculates the weighted average grade for each course
--- ---------------------------------------------------------
+
 SELECT
     c.course_name,
     ROUND(SUM(g.score * a.weighting) / SUM(a.weighting), 2) AS weighted_average_grade,
@@ -531,10 +578,10 @@ JOIN Courses c
 GROUP BY c.course_id, c.course_name
 ORDER BY weighted_average_grade DESC;
 
--- ---------------------------------------------------------
+
 -- Query B: Top 10 Students
 -- Identifies the highest-performing students overall
--- ---------------------------------------------------------
+
 SELECT
     s.student_id,
     CONCAT(s.first_name, ' ', s.last_name) AS student_name,
@@ -557,10 +604,10 @@ GROUP BY s.student_id, s.first_name, s.last_name
 ORDER BY weighted_average_grade DESC
 LIMIT 10;
 
--- ---------------------------------------------------------
+
 -- Query C: Department Performance by Course Ownership
 -- Measures results in courses owned by each department
--- ---------------------------------------------------------
+
 SELECT
     d.department_name,
     ROUND(SUM(g.score * a.weighting) / SUM(a.weighting), 2) AS weighted_average_grade
@@ -576,10 +623,10 @@ JOIN Assessments a
 GROUP BY d.department_id, d.department_name
 ORDER BY weighted_average_grade DESC;
 
--- ---------------------------------------------------------
+
 -- Query D: Student Performance by Home Department
 -- Measures how students from each department perform overall
--- ---------------------------------------------------------
+
 SELECT
     d.department_name,
     ROUND(SUM(g.score * a.weighting) / SUM(a.weighting), 2) AS weighted_average_grade
@@ -595,10 +642,10 @@ JOIN Assessments a
 GROUP BY d.department_id, d.department_name
 ORDER BY weighted_average_grade DESC;
 
--- ---------------------------------------------------------
+
 -- Query E: Coursework vs Exam Performance
 -- Compares average performance in coursework and exams
--- ---------------------------------------------------------
+
 SELECT
     a.assessment_type,
     ROUND(AVG(g.score), 2) AS average_score,
@@ -615,10 +662,10 @@ JOIN Assessments a
 GROUP BY a.assessment_type
 ORDER BY average_score DESC;
 
--- ---------------------------------------------------------
+
 -- Query F: Grade Distribution
 -- Shows the number of results in each classification band
--- ---------------------------------------------------------
+
 SELECT
     CASE
         WHEN g.score >= 70 THEN 'First'
@@ -632,10 +679,10 @@ FROM Grades g
 GROUP BY classification
 ORDER BY total_results DESC;
 
--- ---------------------------------------------------------
+
 -- Query G: Enrolment vs Performance
 -- Shows enrolment count and average performance per course
--- ---------------------------------------------------------
+
 SELECT
     c.course_name,
     COUNT(DISTINCT e.student_id) AS total_enrolments,
@@ -651,10 +698,10 @@ GROUP BY c.course_id, c.course_name
 HAVING COUNT(DISTINCT e.student_id) > 0
 ORDER BY total_enrolments DESC, weighted_average_grade DESC;
 
--- ---------------------------------------------------------
--- Query H: Student Course Results
+
+-- Query H: Student Course Results (Limited Output)
 -- Gives a course-level breakdown for each student
--- ---------------------------------------------------------
+
 SELECT
     s.student_id,
     CONCAT(s.first_name, ' ', s.last_name) AS student_name,
@@ -677,4 +724,5 @@ JOIN Grades g
 JOIN Assessments a
     ON g.assessment_id = a.assessment_id
 GROUP BY s.student_id, s.first_name, s.last_name, c.course_id, c.course_name
-ORDER BY s.student_id, c.course_name;
+ORDER BY s.student_id, c.course_name
+LIMIT 30;

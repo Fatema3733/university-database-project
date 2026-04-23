@@ -1,5 +1,6 @@
 -- UNIVERSITY DATABASE SYSTEM
 
+DROP DATABASE IF EXISTS UniversityDatabase;
 CREATE DATABASE UniversityDatabase;
 USE UniversityDatabase;
 
@@ -473,20 +474,6 @@ LEFT JOIN Assessments a
 GROUP BY c.course_id, c.course_name
 HAVING COALESCE(SUM(a.weighting), 0) <> 100;
 
--- Check for any grades linked to assessments from the wrong course
-SELECT
-    g.grade_id,
-    e.enrolment_id,
-    e.course_id AS enrolment_course,
-    a.assessment_id,
-    a.course_id AS assessment_course
-FROM Grades g
-JOIN Enrolments e
-    ON g.enrolment_id = e.enrolment_id
-JOIN Assessments a
-    ON g.assessment_id = a.assessment_id
-WHERE e.course_id <> a.course_id;
-
 
 INSERT INTO Grades (enrolment_id, assessment_id, score)
 SELECT
@@ -533,6 +520,22 @@ SELECT
 FROM Enrolments e
 JOIN Assessments a
     ON e.course_id = a.course_id;
+
+
+-- Check for any grades linked to assessments from the wrong course
+SELECT
+    g.grade_id,
+    e.enrolment_id,
+    e.course_id AS enrolment_course,
+    a.assessment_id,
+    a.course_id AS assessment_course
+FROM Grades g
+JOIN Enrolments e
+    ON g.enrolment_id = e.enrolment_id
+JOIN Assessments a
+    ON g.assessment_id = a.assessment_id
+WHERE e.course_id <> a.course_id;
+
 
 -- VALIDATION CHECKS
 

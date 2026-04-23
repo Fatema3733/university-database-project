@@ -327,10 +327,12 @@ VALUES
 ('Social Theory', 5, 14, 20, 2),
 ('Public Policy', 5, 15, 20, 3);
 
+
 CREATE TEMPORARY TABLE temp_first_names (
     first_name VARCHAR(50),
     gender VARCHAR(20)
 );
+
 
 INSERT INTO temp_first_names VALUES
 ('Oliver','Male'),('George','Male'),('Harry','Male'),('Jack','Male'),
@@ -349,9 +351,11 @@ INSERT INTO temp_first_names VALUES
 ('Layla','Female'),('Maya','Female'),('Nadia','Female'),('Sara','Female'),
 ('Maryam','Female'),('Noor','Female'),('Yasmin','Female');
 
+
 CREATE TEMPORARY TABLE temp_last_names (
     last_name VARCHAR(50)
 );
+
 
 INSERT INTO temp_last_names VALUES
 ('Smith'),('Jones'),('Taylor'),('Brown'),('Williams'),('Wilson'),
